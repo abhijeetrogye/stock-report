@@ -180,3 +180,14 @@ if uploaded_file is not None:
                 with st.expander("Show me the rows that were removed"):
                     st.write("These rows were deleted to match your target total:")
                     st.dataframe(result_rows)
+
+# --- FOOTER ---
+st.markdown("---")
+st.markdown(
+    """
+    <div style="text-align: center; color: #808080; margin-top: 20px;">
+        <small>Designed and Developed by <b>Abhijeet Rogye</b></small>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
