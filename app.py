@@ -2,42 +2,38 @@ import streamlit as st
 import pandas as pd
 import sys
 import numpy as np
-import time
 
-# Increase recursion depth for deep search trees
+# Increase recursion depth
 sys.setrecursionlimit(20000)
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Stock Value Fixer Pro", layout="centered")
-
-st.title("📊 Stock Value Correction Tool")
+st.set_page_config(page_title="Stock Fixer", layout="centered")
+st.title("📊 Simple Stock Fixer")
 
 # --- CUSTOM CSS ---
 st.markdown("""
     <style>
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-    }
-    .suggestion-box {
-        background-color: #e8f4f9;
-        border-left: 5px solid #0068c9;
+    .step-box {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
         padding: 15px;
-        margin: 10px 0;
+        border-radius: 5px;
+        margin-bottom: 20px;
+    }
+    .success-box {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 15px;
+        border-radius: 5px;
+        margin-top: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # --- HELPER FUNCTIONS ---
-
 def clean_currency(value):
-    """Converts currency strings (e.g., '$1,234.56') to floats."""
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
-        # Remove currency symbols, commas, and spaces
         clean_str = value.replace(',', '').replace('$', '').replace('€', '').replace('£', '').replace(' ', '')
         try:
             return float(clean_str)
@@ -45,54 +41,19 @@ def clean_currency(value):
             return 0.0
     return 0.0
 
-def solve_subset_sum_closest(candidates, target_val, max_steps=5000000):
-    """
-    Finds a subset of candidates that sums up to target_val (Exact) 
-    OR finds the closest subset sum that is LESS THAN target_val (Approx).
-    
-    Args:
-        candidates: List of tuples (original_index, value)
-        target_val: The target sum to remove
-        max_steps: Safety limit to prevent infinite hanging
-        
-    Returns:
-        dict: {
-            'indices': list of indices to remove,
-            'sum': float (sum of removed items),
-            'exact': bool,
-            'diff': float,
-            'status': str
-        }
-    """
-    
-    # 1. Convert to integers for precise calculation (avoid float issues)
+def solve_closest(candidates, target_val, max_steps=5000000):
     scale = 100
     candidates_int = [(idx, int(round(val * scale))) for idx, val in candidates]
     target_int = int(round(target_val * scale))
-    
-    # Sort descending for optimization
     candidates_int.sort(key=lambda x: x[1], reverse=True)
     
     values = [x[1] for x in candidates_int]
     total_available = sum(values)
     
-    # Optimization: If total available is less than target
     if total_available <= target_int:
-        return {
-            'indices': [x[0] for x in candidates],
-            'sum': total_available / scale,
-            'exact': (total_available == target_int),
-            'diff': (target_int - total_available) / scale,
-            'status': 'All items taken (Total < Target)'
-        }
+        return {'indices': [x[0] for x in candidates], 'sum': total_available/scale, 'exact': total_available==target_int, 'diff': (target_int-total_available)/scale}
 
-    # Global best tracker
-    best_solution = {
-        'sum_int': 0,
-        'indices': []
-    }
-    
-    # Suffix sums for pruning
+    best_sol = {'sum': 0, 'indices': []}
     suffix_sums = [0] * (len(values) + 1)
     for i in range(len(values) - 1, -1, -1):
         suffix_sums[i] = suffix_sums[i+1] + values[i]
@@ -100,215 +61,155 @@ def solve_subset_sum_closest(candidates, target_val, max_steps=5000000):
     found_exact = False
     steps = 0
 
-    def backtrack(index, current_sum, current_indices):
+    def backtrack(idx, current_sum, current_indices):
         nonlocal found_exact, steps
         steps += 1
+        if steps > max_steps or found_exact: return
         
-        # Safety break
-        if steps > max_steps:
-            return
-
-        if found_exact: return
-        
-        # Check if we hit the target exactly
         if current_sum == target_int:
-            best_solution['sum_int'] = current_sum
-            best_solution['indices'] = list(current_indices)
+            best_sol['sum'] = current_sum
+            best_sol['indices'] = list(current_indices)
             found_exact = True
             return
 
-        # If we exceeded target
-        if current_sum > target_int:
-            return
+        if current_sum > target_int: return
 
-        # Update best solution found so far (Maximize sum <= target)
-        if current_sum > best_solution['sum_int']:
-            best_solution['sum_int'] = current_sum
-            best_solution['indices'] = list(current_indices)
+        if current_sum > best_sol['sum']:
+            best_sol['sum'] = current_sum
+            best_sol['indices'] = list(current_indices)
 
-        # Stop if no more candidates
-        if index >= len(candidates_int):
-            return
+        if idx >= len(candidates_int): return
+        if current_sum + suffix_sums[idx] <= best_sol['sum']: return
 
-        # Pruning: If current_sum + all remaining items <= best_solution['sum_int']
-        if current_sum + suffix_sums[index] <= best_solution['sum_int']:
-            return
-
-        # Recurse: Include current item
-        if current_sum + values[index] <= target_int:
-            current_indices.append(candidates_int[index][0])
-            backtrack(index + 1, current_sum + values[index], current_indices)
+        if current_sum + values[idx] <= target_int:
+            current_indices.append(candidates_int[idx][0])
+            backtrack(idx + 1, current_sum + values[idx], current_indices)
             current_indices.pop()
         
-        # Recurse: Exclude current item
-        backtrack(index + 1, current_sum, current_indices)
+        backtrack(idx + 1, current_sum, current_indices)
 
-    # Start solver
     backtrack(0, 0, [])
     
-    final_sum = best_solution['sum_int'] / scale
-    diff = (target_int - best_solution['sum_int']) / scale
-    
-    status = 'Exact' if found_exact else 'Approximate'
-    if steps > max_steps:
-        status += ' (Time Limit Reached)'
-        
     return {
-        'indices': best_solution['indices'],
-        'sum': final_sum,
+        'indices': best_sol['indices'],
+        'sum': best_sol['sum'] / scale,
         'exact': found_exact,
-        'diff': diff,
-        'status': status
+        'diff': (target_int - best_sol['sum']) / scale
     }
 
-# --- MAIN APP LOGIC ---
+# --- APP ---
 
-st.info("👋 Welcome! Upload your file and follow the steps below.")
+st.write("Upload your file. We'll help you find the rows to remove.")
 
-# 1. File Upload
-st.header("1. Upload Data & Settings")
-uploaded_file = st.file_uploader("Upload Excel or CSV file", type=['xlsx', 'csv'])
+# 1. UPLOAD
+uploaded_file = st.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # PROBLEM 3 SOLUTION: Header Row Selection
-    col_h1, col_h2 = st.columns([1, 2])
-    with col_h1:
-        header_row = st.number_input(
-            "Header Row Number", 
-            min_value=0, 
-            value=0, 
-            help="Row number where column names are located (0-based). Increase this if columns look wrong (e.g. Unnamed: 0)."
-        )
+    # --- STEP 1: VISUAL HEADER SELECTION ---
+    st.markdown("### Step 1: Where are the column names?")
     
-    try:
-        # Load data with specified header
-        if uploaded_file.name.endswith('.csv'):
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, header=header_row)
-        else:
-            uploaded_file.seek(0)
-            df = pd.read_excel(uploaded_file, header=header_row)
-            
-        st.write("Preview of loaded data:")
-        st.dataframe(df.head())
+    # Read raw to show preview
+    if uploaded_file.name.endswith('.csv'):
+        df_raw = pd.read_csv(uploaded_file, header=None, nrows=10)
+    else:
+        df_raw = pd.read_excel(uploaded_file, header=None, nrows=10)
+    
+    # Create friendly options
+    options = []
+    for i in range(len(df_raw)):
+        # Get first 3 non-empty values to show as preview
+        row_values = [str(x) for x in df_raw.iloc[i].dropna().values]
+        preview_text = ", ".join(row_values[:4])
+        if len(preview_text) > 50: preview_text = preview_text[:50] + "..."
+        options.append(f"Row {i+1}:  {preview_text}")
         
-        # PROBLEM 2 SOLUTION: Column Selection
-        st.header("2. Configure Target")
-        
-        all_cols = df.columns.tolist()
-        
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            target_col = st.selectbox(
-                "Select the 'Amount' Column", 
-                options=all_cols,
-                index=0,
-                help="Choose the column containing the values you want to sum/remove."
-            )
-            
-        # Clean the selected column
-        df['__calc_value__'] = df[target_col].apply(clean_currency)
-        
-        # Filter out rows with 0 or NaN values for calculation purposes
-        # (We keep them in df, but candidates must be positive)
-        
-        current_total = df['__calc_value__'].sum()
-        
-        with col_s2:
-            st.metric("Current Total Amount", f"{current_total:,.2f}")
-            
-        desired_total = st.number_input(
-            "Enter Desired Target Total", 
-            min_value=0.0, 
-            value=float(current_total),
-            step=100.0,
-            format="%.2f"
-        )
-        
-        remove_amount = current_total - desired_total
-        
-        if remove_amount < -0.01: # Tolerance for float
-            st.error("Desired total is higher than current total! This tool is for REMOVING rows to lower the total.")
-        else:
-            st.markdown(f"### Target to Remove: `{remove_amount:,.2f}`")
-            
-            if st.button("Find Rows to Remove", type="primary"):
-                if remove_amount <= 0.01:
-                    st.warning("Nothing to remove.")
-                else:
-                    with st.spinner("Calculating optimal combination..."):
-                        # Prepare candidates
-                        candidates = []
-                        # Only consider positive values
-                        for idx, val in df['__calc_value__'].items():
-                            if val > 0.01:
-                                candidates.append((idx, val))
-                        
-                        # Run Solver
-                        result = solve_subset_sum_closest(candidates, remove_amount)
-                        
-                        # Process Result
-                        indices_to_remove = result['indices']
-                        actual_removed_sum = result['sum']
-                        is_exact = result['exact']
-                        difference = result['diff']
-                        status = result['status']
-                        
-                        # --- DISPLAY RESULTS ---
-                        st.divider()
-                        st.subheader("Calculation Results")
-                        
-                        col_r1, col_r2, col_r3 = st.columns(3)
-                        col_r1.metric("Target Removal", f"{remove_amount:,.2f}")
-                        col_r2.metric("Actual Found Removal", f"{actual_removed_sum:,.2f}")
-                        col_r3.metric("Difference (Short by)", f"{difference:,.2f}")
-                        
-                        # PROBLEM 1 SOLUTION: Suggestion Logic
-                        if not is_exact:
-                            st.warning(f"⚠️ Exact match not found. ({status})")
-                            if difference > 0:
-                                st.markdown(
-                                    f"""
-                                    <div class="suggestion-box">
-                                        <strong>💡 Suggestion to Fix:</strong><br>
-                                        We found a combination summing to <b>{actual_removed_sum:,.2f}</b>.<br>
-                                        You are short by <b>{difference:,.2f}</b>.<br><br>
-                                        <u>Recommended Action:</u><br> 
-                                        Select one of the rows below (to be removed) and <b>INCREASE its amount by {difference:,.2f}</b>.
-                                        Then the total removed will match your target exactly.
-                                    </div>
-                                    """, unsafe_allow_html=True
-                                )
-                            else:
-                                st.info("Difference is negligible.")
-                        else:
-                            st.success("✅ Exact match found!")
+    selected_option = st.selectbox(
+        "Look at the file preview. Which row contains headers like 'Amount', 'Name'?", 
+        options,
+        index=0
+    )
+    
+    header_index = options.index(selected_option)
+    
+    # Reload with correct header
+    uploaded_file.seek(0)
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file, header=header_index)
+    else:
+        df = pd.read_excel(uploaded_file, header=header_index)
 
-                        # Create Result Dataframes
-                        df_removed = df.loc[indices_to_remove].copy()
-                        df_kept = df.drop(index=indices_to_remove).copy()
+    st.write("---")
+    
+    # --- STEP 2: COLUMN SELECTION ---
+    st.markdown("### Step 2: What is the target?")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        # Try to auto-select column with 'amount' in name
+        amount_col_idx = 0
+        for i, col in enumerate(df.columns):
+            if "amt" in str(col).lower() or "amount" in str(col).lower():
+                amount_col_idx = i
+                break
+                
+        target_col = st.selectbox("Select the Column with Amounts:", df.columns, index=amount_col_idx)
+        
+    # Clean data
+    df['__val__'] = df[target_col].apply(clean_currency)
+    current_total = df['__val__'].sum()
+    
+    with col2:
+        st.metric("Current Total", f"{current_total:,.2f}")
+        
+    desired_total = st.number_input("Enter Desired Total:", value=float(current_total), step=100.0)
+    
+    to_remove = current_total - desired_total
+    
+    if to_remove < -0.01:
+        st.error("Desired total is higher than current! You need to remove rows, not add them.")
+    else:
+        st.info(f"Need to remove: **{to_remove:,.2f}**")
+        
+        if st.button("Find Rows to Remove", type="primary"):
+            if to_remove <= 0.01:
+                st.success("Total is already correct!")
+            else:
+                with st.spinner("Calculating..."):
+                    # Candidates
+                    cands = [(i, v) for i, v in df['__val__'].items() if v > 0.01]
+                    res = solve_closest(cands, to_remove)
+                    
+                    st.write("---")
+                    st.subheader("Results")
+                    
+                    col_r1, col_r2 = st.columns(2)
+                    col_r1.metric("Target Removal", f"{to_remove:,.2f}")
+                    col_r2.metric("Found Removal", f"{res['sum']:,.2f}")
+                    
+                    if not res['exact']:
+                        diff = res['diff']
+                        st.warning("⚠️ Exact match not found.")
+                        st.markdown(f"""
+                        <div class="step-box" style="border-left: 5px solid orange;">
+                            <strong>💡 Simple Fix:</strong><br>
+                            We found rows summing to <b>{res['sum']:,.2f}</b>.<br>
+                            You are still short by <b>{diff:,.2f}</b>.<br>
+                            Just <b>add {diff:,.2f}</b> to one of the rows below before deleting it.
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.success("✅ Exact match found!")
                         
-                        # Clean up
-                        if '__calc_value__' in df_removed.columns:
-                            del df_removed['__calc_value__']
-                        if '__calc_value__' in df_kept.columns:
-                            del df_kept['__calc_value__']
-                        
-                        # Show Removed Rows
-                        st.write(f"**{len(df_removed)} rows to remove:**")
-                        st.dataframe(df_removed)
-                            
-                        # Download Button
-                        st.subheader("⬇️ Download Final File")
-                        csv_kept = df_kept.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Cleaned File (Rows Removed)",
-                            data=csv_kept,
-                            file_name="cleaned_stock_list.csv",
-                            mime="text/csv",
-                            type="primary"
-                        )
-
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
-        st.info("Tip: Try changing the 'Header Row Number' if the preview looks empty or incorrect.")
+                    # Show dataframe
+                    df_out = df.loc[res['indices']].copy()
+                    if '__val__' in df_out: del df_out['__val__']
+                    
+                    st.write("Rows to remove:")
+                    st.dataframe(df_out)
+                    
+                    # Download
+                    df_keep = df.drop(index=res['indices']).copy()
+                    if '__val__' in df_keep: del df_keep['__val__']
+                    
+                    csv = df_keep.to_csv(index=False).encode('utf-8')
+                    st.download_button("⬇️ Download Final File", csv, "cleaned_file.csv", "text/csv", type="primary")
