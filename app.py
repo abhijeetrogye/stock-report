@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sys
 import io
+import re
 
 # Increase recursion depth
 sys.setrecursionlimit(20000)
@@ -108,14 +109,18 @@ if uploaded_file:
     # --- STEP 1: HEADER DETECTION ---
     st.markdown("### Step 1: Where are the column names?")
     
+    file_type = 'csv' if uploaded_file.name.lower().endswith('.csv') else 'xlsx'
+    
     # Read entire file as raw to preserve preamble
     uploaded_file.seek(0)
-    if uploaded_file.name.endswith('.csv'):
+    
+    if file_type == 'csv':
         # Keep original lines for preamble reconstruction
-        raw_lines = uploaded_file.getvalue().decode('utf-8').splitlines()
+        raw_lines = uploaded_file.getvalue().decode('utf-8', errors='replace').splitlines()
         # Create a temp dataframe just for previewing rows
         df_preview = pd.read_csv(io.StringIO('\n'.join(raw_lines[:15])), header=None)
     else:
+        # Excel
         df_preview = pd.read_excel(uploaded_file, header=None, nrows=15)
     
     # Create friendly options
@@ -136,16 +141,15 @@ if uploaded_file:
     
     # Process the Data
     uploaded_file.seek(0)
-    if uploaded_file.name.endswith('.csv'):
+    if file_type == 'csv':
         df = pd.read_csv(uploaded_file, header=header_index)
         # Capture preamble lines
         preamble_lines = raw_lines[:header_index]
         preamble_text = "\n".join(preamble_lines) + "\n" if preamble_lines else ""
     else:
         df = pd.read_excel(uploaded_file, header=header_index)
-        # Capture preamble from the raw preview dataframe
-        preamble_df = df_preview.iloc[:header_index]
-        preamble_text = preamble_df.to_csv(index=False, header=False)
+        # Capture preamble df for later
+        df_preamble_excel = pd.read_excel(uploaded_file, header=None, nrows=header_index) if header_index > 0 else pd.DataFrame()
 
     st.write("---")
     
@@ -213,21 +217,44 @@ if uploaded_file:
                     # --- FIX: Clean headers to remove 'Unnamed: X' ---
                     clean_headers = []
                     for col in df_keep.columns:
-                        if str(col).startswith("Unnamed:"):
+                        # Check for Unnamed using regex to be safe
+                        if pd.isna(col) or str(col).strip() == "" or "Unnamed" in str(col):
                             clean_headers.append("")
                         else:
                             clean_headers.append(col)
                     df_keep.columns = clean_headers
                     # -------------------------------------------------
                     
-                    csv_data = df_keep.to_csv(index=False)
-                    final_csv_content = preamble_text + csv_data
-                    
+                    if file_type == 'csv':
+                        # CSV Output Strategy: Concatenate Strings
+                        csv_data = df_keep.to_csv(index=False)
+                        final_content = preamble_text + csv_data
+                        file_name = "fixed_file.csv"
+                        mime_type = "text/csv"
+                        out_data = final_content.encode('utf-8')
+                        
+                    else:
+                        # Excel Output Strategy: Multi-row write
+                        # Use BytesIO
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                            # 1. Write Preamble (if any)
+                            if header_index > 0:
+                                df_preamble_excel.to_excel(writer, index=False, header=False, startrow=0)
+                            
+                            # 2. Write Main Table
+                            # startrow = number of preamble rows
+                            df_keep.to_excel(writer, index=False, header=True, startrow=header_index)
+                        
+                        out_data = output.getvalue()
+                        file_name = "fixed_file.xlsx"
+                        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
                     st.download_button(
-                        label="⬇️ Download Final CSV", 
-                        data=final_csv_content, 
-                        file_name="fixed_file.csv", 
-                        mime="text/csv", 
+                        label=f"⬇️ Download Final {file_type.upper()}", 
+                        data=out_data, 
+                        file_name=file_name, 
+                        mime=mime_type, 
                         type="primary"
                     )
                     
