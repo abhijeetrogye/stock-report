@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import sys
 import io
-import re
 
 # Increase recursion depth
 sys.setrecursionlimit(20000)
@@ -26,6 +25,12 @@ st.markdown("""
         padding: 15px;
         border-radius: 5px;
         margin-top: 20px;
+    }
+    .instruction-text {
+        font-size: 1.1em;
+        font-weight: 500;
+        color: #31333F;
+        margin-bottom: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -100,85 +105,87 @@ def solve_closest(candidates, target_val, max_steps=5000000):
 
 # --- APP ---
 
-st.write("Upload your file. We'll help you find the rows to remove.")
+st.write("Upload your file to get started.")
 
 # 1. UPLOAD
 uploaded_file = st.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # --- STEP 1: HEADER DETECTION ---
-    st.markdown("### Step 1: Where are the column names?")
-    
     file_type = 'csv' if uploaded_file.name.lower().endswith('.csv') else 'xlsx'
     
-    # Read entire file as raw to preserve preamble
+    # --- STEP 1: HEADER SELECTION (VISUAL) ---
+    st.divider()
+    st.markdown("### 1. Select Header Row")
+    st.info("Look at the table below. Find the row that contains your column names (like 'Amount', 'Name').")
+    
+    # Read raw for preview
     uploaded_file.seek(0)
-    
     if file_type == 'csv':
-        # Keep original lines for preamble reconstruction
         raw_lines = uploaded_file.getvalue().decode('utf-8', errors='replace').splitlines()
-        # Create a temp dataframe just for previewing rows
-        df_preview = pd.read_csv(io.StringIO('\n'.join(raw_lines[:15])), header=None)
+        df_preview = pd.read_csv(io.StringIO('\n'.join(raw_lines[:20])), header=None)
     else:
-        # Excel
-        df_preview = pd.read_excel(uploaded_file, header=None, nrows=15)
+        df_preview = pd.read_excel(uploaded_file, header=None, nrows=20)
     
-    # Create friendly options
-    options = []
-    for i in range(len(df_preview)):
-        row_values = [str(x) for x in df_preview.iloc[i].dropna().values]
-        preview_text = ", ".join(row_values[:4])
-        if len(preview_text) > 50: preview_text = preview_text[:50] + "..."
-        options.append(f"Row {i+1}:  {preview_text}")
-        
-    selected_option = st.selectbox(
-        "Look at the file preview. Which row contains headers like 'Amount', 'Name'?", 
-        options,
-        index=0
+    # Display Preview
+    st.dataframe(df_preview, use_container_width=True)
+    
+    # Input for Header Row
+    header_index = st.number_input(
+        "Which Row Number (0, 1, 2...) contains the headers?", 
+        min_value=0, 
+        max_value=len(df_preview)-1, 
+        value=0,
+        step=1,
+        help="Enter the bold number you see on the left side of the row."
     )
     
-    header_index = options.index(selected_option)
-    
-    # Process the Data
+    # Reload Data with correct header
     uploaded_file.seek(0)
     if file_type == 'csv':
         df = pd.read_csv(uploaded_file, header=header_index)
-        # Capture preamble lines
         preamble_lines = raw_lines[:header_index]
         preamble_text = "\n".join(preamble_lines) + "\n" if preamble_lines else ""
     else:
         df = pd.read_excel(uploaded_file, header=header_index)
-        # Capture preamble df for later
         df_preamble_excel = pd.read_excel(uploaded_file, header=None, nrows=header_index) if header_index > 0 else pd.DataFrame()
 
-    st.write("---")
-    
     # --- STEP 2: COLUMN SELECTION ---
-    st.markdown("### Step 2: What is the target?")
+    st.divider()
+    st.markdown("### 2. Select Amount Column")
     
     col1, col2 = st.columns(2)
     with col1:
+        # Auto-detect column
         amount_col_idx = 0
         for i, col in enumerate(df.columns):
             if "amt" in str(col).lower() or "amount" in str(col).lower():
                 amount_col_idx = i
                 break
-        target_col = st.selectbox("Select the Column with Amounts:", df.columns, index=amount_col_idx)
         
+        target_col = st.selectbox(
+            "Select the column containing the Amounts:", 
+            df.columns, 
+            index=amount_col_idx
+        )
+        
+    # Calculate
     df['__val__'] = df[target_col].apply(clean_currency)
     current_total = df['__val__'].sum()
     
     with col2:
         st.metric("Current Total", f"{current_total:,.2f}")
-        
-    desired_total = st.number_input("Enter Desired Total:", value=float(current_total), step=100.0)
+
+    # --- STEP 3: TARGET ---
+    st.divider()
+    st.markdown("### 3. Enter Target")
     
+    desired_total = st.number_input("What is your Desired Total?", value=float(current_total), step=100.0)
     to_remove = current_total - desired_total
     
     if to_remove < -0.01:
-        st.error("Desired total is higher than current! You need to remove rows, not add them.")
+        st.error("Desired total is higher than current! This tool removes rows to lower the total.")
     else:
-        st.info(f"Need to remove: **{to_remove:,.2f}**")
+        st.info(f"Target to remove: **{to_remove:,.2f}**")
         
         if st.button("Find Rows to Remove", type="primary"):
             if to_remove <= 0.01:
@@ -188,23 +195,22 @@ if uploaded_file:
                     cands = [(i, v) for i, v in df['__val__'].items() if v > 0.01]
                     res = solve_closest(cands, to_remove)
                     
-                    st.write("---")
+                    st.divider()
                     st.subheader("Results")
                     
-                    col_r1, col_r2 = st.columns(2)
-                    col_r1.metric("Target Removal", f"{to_remove:,.2f}")
-                    col_r2.metric("Found Removal", f"{res['sum']:,.2f}")
+                    c1, c2 = st.columns(2)
+                    c1.metric("Target Removal", f"{to_remove:,.2f}")
+                    c2.metric("Found Removal", f"{res['sum']:,.2f}")
                     
                     if not res['exact']:
                         diff = res['diff']
                         st.warning("⚠️ Exact match not found.")
                         st.markdown(f"""
                         <div class="step-box" style="border-left: 5px solid #0068c9;">
-                            <strong>💡 Recommendation (For Kept Rows):</strong><br>
-                            We found rows to remove summing to <b>{res['sum']:,.2f}</b>.<br>
-                            This leaves your total <b>{diff:,.2f} higher</b> than your target.<br><br>
-                            <u>To fix this:</u><br>
-                            <b>Subtract {diff:,.2f}</b> from one of the rows you are keeping.
+                            <strong>💡 How to Fix:</strong><br>
+                            We found rows summing to <b>{res['sum']:,.2f}</b>.<br>
+                            To match your target exactly, you need to remove an extra <b>{diff:,.2f}</b>.<br><br>
+                            <u>Action:</u> <b>Subtract {diff:,.2f}</b> from the 'Amount' of one of the rows you are <b>KEEPING</b>.
                         </div>
                         """, unsafe_allow_html=True)
                     else:
@@ -214,54 +220,43 @@ if uploaded_file:
                     df_keep = df.drop(index=res['indices']).copy()
                     if '__val__' in df_keep: del df_keep['__val__']
                     
-                    # --- FIX: Clean headers to remove 'Unnamed: X' ---
+                    # CLEAN HEADERS (Remove Unnamed)
                     clean_headers = []
                     for col in df_keep.columns:
-                        # Check for Unnamed using regex to be safe
                         if pd.isna(col) or str(col).strip() == "" or "Unnamed" in str(col):
                             clean_headers.append("")
                         else:
                             clean_headers.append(col)
                     df_keep.columns = clean_headers
-                    # -------------------------------------------------
                     
+                    # GENERATE FILE
                     if file_type == 'csv':
-                        # CSV Output Strategy: Concatenate Strings
                         csv_data = df_keep.to_csv(index=False)
                         final_content = preamble_text + csv_data
-                        file_name = "fixed_file.csv"
-                        mime_type = "text/csv"
                         out_data = final_content.encode('utf-8')
-                        
+                        fname = "fixed_file.csv"
+                        mime = "text/csv"
                     else:
-                        # Excel Output Strategy: Multi-row write
-                        # Use BytesIO
                         output = io.BytesIO()
-                        # CHANGED: engine='openpyxl' to avoid missing xlsxwriter dependency
+                        # Use openpyxl engine
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            # 1. Write Preamble (if any)
                             if header_index > 0:
                                 df_preamble_excel.to_excel(writer, index=False, header=False, startrow=0)
-                            
-                            # 2. Write Main Table
-                            # startrow = number of preamble rows
                             df_keep.to_excel(writer, index=False, header=True, startrow=header_index)
-                        
                         out_data = output.getvalue()
-                        file_name = "fixed_file.xlsx"
-                        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        fname = "fixed_file.xlsx"
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
                     st.download_button(
-                        label=f"⬇️ Download Final {file_type.upper()}", 
+                        label="⬇️ Download Final File", 
                         data=out_data, 
-                        file_name=file_name, 
-                        mime=mime_type, 
+                        file_name=fname, 
+                        mime=mime, 
                         type="primary"
                     )
                     
-                    # Show removed rows at the bottom
-                    st.divider()
-                    st.caption("Rows removed:")
-                    df_out = df.loc[res['indices']].copy()
-                    if '__val__' in df_out: del df_out['__val__']
-                    st.dataframe(df_out)
+                    st.caption(f"Removed {len(res['indices'])} rows.")
+                    with st.expander("See removed rows"):
+                        df_out = df.loc[res['indices']].copy()
+                        if '__val__' in df_out: del df_out['__val__']
+                        st.dataframe(df_out)
