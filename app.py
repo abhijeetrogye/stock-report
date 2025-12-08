@@ -237,7 +237,8 @@ if uploaded_file:
                         # Excel Output Strategy: Multi-row write
                         # Use BytesIO
                         output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        # CHANGED: engine='openpyxl' to avoid missing xlsxwriter dependency
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             # 1. Write Preamble (if any)
                             if header_index > 0:
                                 df_preamble_excel.to_excel(writer, index=False, header=False, startrow=0)
