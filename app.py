@@ -210,11 +210,21 @@ if uploaded_file:
                     df_keep = df.drop(index=res['indices']).copy()
                     if '__val__' in df_keep: del df_keep['__val__']
                     
+                    # --- FIX: Clean headers to remove 'Unnamed: X' ---
+                    clean_headers = []
+                    for col in df_keep.columns:
+                        if str(col).startswith("Unnamed:"):
+                            clean_headers.append("")
+                        else:
+                            clean_headers.append(col)
+                    df_keep.columns = clean_headers
+                    # -------------------------------------------------
+                    
                     csv_data = df_keep.to_csv(index=False)
                     final_csv_content = preamble_text + csv_data
                     
                     st.download_button(
-                        label="⬇️ Download Final CSV (Preserving Header)", 
+                        label="⬇️ Download Final CSV", 
                         data=final_csv_content, 
                         file_name="fixed_file.csv", 
                         mime="text/csv", 
