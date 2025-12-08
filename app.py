@@ -107,7 +107,7 @@ if uploaded_file is not None:
             st.success(f"File Loaded! Total Rows: {len(df_clean)}")
             st.metric(label="Current Total Amount (Auto-Calculated)", value=f"{current_total:,.2f}")
             
-            desired_total = st.number_input("Enter Desired Total Amount:", min_value=0.0, value=current_total, step=0.01, format="%.2f")
+            desired_total = st.number_input("Enter Desired Total Amount:", min_value=0.0, value=float(current_total), step=0.01, format="%.2f")
             
             # --- CALCULATION BUTTON ---
             if st.button("Find Rows to Remove"):
