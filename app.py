@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sys
-import numpy as np
+import io
 
 # Increase recursion depth
 sys.setrecursionlimit(20000)
@@ -105,20 +105,23 @@ st.write("Upload your file. We'll help you find the rows to remove.")
 uploaded_file = st.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # --- STEP 1: VISUAL HEADER SELECTION ---
+    # --- STEP 1: HEADER DETECTION ---
     st.markdown("### Step 1: Where are the column names?")
     
-    # Read raw to show preview
+    # Read entire file as raw to preserve preamble
+    uploaded_file.seek(0)
     if uploaded_file.name.endswith('.csv'):
-        df_raw = pd.read_csv(uploaded_file, header=None, nrows=10)
+        # Keep original lines for preamble reconstruction
+        raw_lines = uploaded_file.getvalue().decode('utf-8').splitlines()
+        # Create a temp dataframe just for previewing rows
+        df_preview = pd.read_csv(io.StringIO('\n'.join(raw_lines[:15])), header=None)
     else:
-        df_raw = pd.read_excel(uploaded_file, header=None, nrows=10)
+        df_preview = pd.read_excel(uploaded_file, header=None, nrows=15)
     
     # Create friendly options
     options = []
-    for i in range(len(df_raw)):
-        # Get first 3 non-empty values to show as preview
-        row_values = [str(x) for x in df_raw.iloc[i].dropna().values]
+    for i in range(len(df_preview)):
+        row_values = [str(x) for x in df_preview.iloc[i].dropna().values]
         preview_text = ", ".join(row_values[:4])
         if len(preview_text) > 50: preview_text = preview_text[:50] + "..."
         options.append(f"Row {i+1}:  {preview_text}")
@@ -131,12 +134,18 @@ if uploaded_file:
     
     header_index = options.index(selected_option)
     
-    # Reload with correct header
+    # Process the Data
     uploaded_file.seek(0)
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file, header=header_index)
+        # Capture preamble lines
+        preamble_lines = raw_lines[:header_index]
+        preamble_text = "\n".join(preamble_lines) + "\n" if preamble_lines else ""
     else:
         df = pd.read_excel(uploaded_file, header=header_index)
+        # Capture preamble from the raw preview dataframe
+        preamble_df = df_preview.iloc[:header_index]
+        preamble_text = preamble_df.to_csv(index=False, header=False)
 
     st.write("---")
     
@@ -145,16 +154,13 @@ if uploaded_file:
     
     col1, col2 = st.columns(2)
     with col1:
-        # Try to auto-select column with 'amount' in name
         amount_col_idx = 0
         for i, col in enumerate(df.columns):
             if "amt" in str(col).lower() or "amount" in str(col).lower():
                 amount_col_idx = i
                 break
-                
         target_col = st.selectbox("Select the Column with Amounts:", df.columns, index=amount_col_idx)
         
-    # Clean data
     df['__val__'] = df[target_col].apply(clean_currency)
     current_total = df['__val__'].sum()
     
@@ -175,7 +181,6 @@ if uploaded_file:
                 st.success("Total is already correct!")
             else:
                 with st.spinner("Calculating..."):
-                    # Candidates
                     cands = [(i, v) for i, v in df['__val__'].items() if v > 0.01]
                     res = solve_closest(cands, to_remove)
                     
@@ -190,26 +195,35 @@ if uploaded_file:
                         diff = res['diff']
                         st.warning("⚠️ Exact match not found.")
                         st.markdown(f"""
-                        <div class="step-box" style="border-left: 5px solid orange;">
-                            <strong>💡 Simple Fix:</strong><br>
-                            We found rows summing to <b>{res['sum']:,.2f}</b>.<br>
-                            You are still short by <b>{diff:,.2f}</b>.<br>
-                            Just <b>add {diff:,.2f}</b> to one of the rows below before deleting it.
+                        <div class="step-box" style="border-left: 5px solid #0068c9;">
+                            <strong>💡 Recommendation (For Kept Rows):</strong><br>
+                            We found rows to remove summing to <b>{res['sum']:,.2f}</b>.<br>
+                            This leaves your total <b>{diff:,.2f} higher</b> than your target.<br><br>
+                            <u>To fix this:</u><br>
+                            <b>Subtract {diff:,.2f}</b> from one of the rows you are keeping.
                         </div>
                         """, unsafe_allow_html=True)
                     else:
                         st.success("✅ Exact match found!")
                         
-                    # Show dataframe
-                    df_out = df.loc[res['indices']].copy()
-                    if '__val__' in df_out: del df_out['__val__']
-                    
-                    st.write("Rows to remove:")
-                    st.dataframe(df_out)
-                    
-                    # Download
+                    # Prepare Download
                     df_keep = df.drop(index=res['indices']).copy()
                     if '__val__' in df_keep: del df_keep['__val__']
                     
-                    csv = df_keep.to_csv(index=False).encode('utf-8')
-                    st.download_button("⬇️ Download Final File", csv, "cleaned_file.csv", "text/csv", type="primary")
+                    csv_data = df_keep.to_csv(index=False)
+                    final_csv_content = preamble_text + csv_data
+                    
+                    st.download_button(
+                        label="⬇️ Download Final CSV (Preserving Header)", 
+                        data=final_csv_content, 
+                        file_name="fixed_file.csv", 
+                        mime="text/csv", 
+                        type="primary"
+                    )
+                    
+                    # Show removed rows at the bottom
+                    st.divider()
+                    st.caption("Rows removed:")
+                    df_out = df.loc[res['indices']].copy()
+                    if '__val__' in df_out: del df_out['__val__']
+                    st.dataframe(df_out)
